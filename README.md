@@ -1,7 +1,10 @@
 Commands:-
 
 git clone https:xxxxxxxxx
-pip install -r requirements.txt
+
+pip install torch transformers sentence-transformers flask annoy numpy
+
+
 python mongo-llm.py
 
 

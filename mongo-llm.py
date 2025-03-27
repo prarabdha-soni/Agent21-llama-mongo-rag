@@ -2,9 +2,8 @@ from flask import Flask, request, jsonify
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
-import faiss
+from annoy import AnnoyIndex
 import numpy as np
-import json
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -32,15 +31,19 @@ query_examples = [
      "query": '{"$match": {"order_date": {"$gte": ISODate("2024-03-20")}}}'}
 ]
 
-# Create FAISS Index for fast retrieval
+# Create Annoy Index for fast retrieval
 dimension = 384  # Embedding size of MiniLM
-index = faiss.IndexFlatL2(dimension)
+annoy_index = AnnoyIndex(dimension, metric='euclidean')
 
 # Store embeddings
 query_texts = [q["text"] for q in query_examples]
 query_embeddings = embedding_model.encode(query_texts)
-query_embeddings = np.array(query_embeddings).astype("float32")
-index.add(query_embeddings)
+
+# Add to Annoy index
+for i, vec in enumerate(query_embeddings):
+    annoy_index.add_item(i, vec)
+
+annoy_index.build(10)  # Build the index with 10 trees
 
 # Map indices to queries
 query_map = {i: q["query"] for i, q in enumerate(query_examples)}
@@ -48,13 +51,15 @@ query_map = {i: q["query"] for i, q in enumerate(query_examples)}
 
 def retrieve_similar_queries(user_request, top_k=1):
     """
-    Retrieve the most relevant MongoDB query using FAISS.
+    Retrieve the most relevant MongoDB query using Annoy.
     """
-    query_embedding = embedding_model.encode([user_request]).astype("float32")
-    D, I = index.search(query_embedding, top_k)
+    query_embedding = embedding_model.encode([user_request])[0]
+    closest_indices = annoy_index.get_nns_by_vector(query_embedding, top_k, include_distances=True)
 
-    if D[0][0] < 0.5:  # If similarity is high (lower distance)
-        return query_map.get(I[0][0], None)
+    index, distance = closest_indices[0][0], closest_indices[1][0]
+
+    if distance < 0.5:  # If similarity is high (lower distance)
+        return query_map.get(index, None)
     return None
 
 
@@ -92,7 +97,6 @@ def generate():
     """
     API endpoint to convert natural language input to MongoDB queries.
     """
-
     user_request = request.json.get("query")
 
     if not user_request:
